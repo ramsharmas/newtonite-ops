@@ -1,0 +1,11 @@
+# Render Blueprint: one free web service built from the Dockerfile.
+# The free disk is temporary, so the H2 data resets on every deploy or restart
+# and the app seeds fresh demo data on start.
+services:
+  - type: web
+    name: newtonite-ops
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /api/users
+    autoDeploy: true

@@ -7,6 +7,9 @@ the system stays correct when several people touch the same item at the same tim
 
 ![A lead's view: what needs attention, the queue, and one item open](docs/screenshots/overview.png)
 
+**Live demo:** https://newtonite-ops-quld.onrender.com (free hosting: the first visit after a quiet
+period takes about a minute to wake up, and the data resets whenever it restarts).
+
 Built with Java 21, Spring Boot 4.1, Spring Data JPA (Hibernate) and an H2 database stored
 in a local file. The front end is plain HTML, CSS and JavaScript (ES modules, no build step).
 
@@ -43,6 +46,13 @@ rm -rf data && ./mvnw spring-boot:run -Dspring-boot.run.arguments=--newtonite.se
 
 In VS Code: install the **Extension Pack for Java**, open
 `src/main/java/com/newtonite/ops/NewtoniteOpsApplication.java` and click **Run** above `main`.
+
+## Deploy
+
+The live demo above runs from this repository. `Dockerfile` builds and runs the app, and `render.yaml` describes it as a free web service on
+[Render](https://render.com): choose **New → Blueprint**, pick this repository and apply. The
+free plan sleeps after 15 minutes without visitors (the next visit takes a minute or so to wake
+it), and its disk is temporary, so each restart begins again from the demo data.
 
 ## Demo data
 

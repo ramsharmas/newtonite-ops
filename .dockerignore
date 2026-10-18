@@ -1,0 +1,8 @@
+.git
+.vscode
+.mvn
+target
+data
+docs
+e2e
+*.md
