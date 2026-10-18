@@ -1,32 +1,24 @@
 # Engineering decisions
 
-Why the app is built the way it is, and what each choice costs.
+The brief describes a company whose problem is *coordination under pressure*: people step on
+each other, work gets lost, nobody can say why something happened. So I spent the day on
+making a small system **correct when several people use it at once** and **easy to read at a
+glance**, not on a long feature list. There is one record type (the work item), two roles
+(lead and member, per team) and seven workflow actions.
 
-## 1. Keep the scope small
+This file explains the five decisions I would defend first, then the smaller ones, what I left
+out on purpose, how the system behaves when things fail, and what I'd change if it grew.
 
-There is one record type, the **work item**. Comments and history belong to it. A
-refund, an incident and a document check are all work items with a different `kind`,
-priority and approval flag. Roles are only **member** and **lead**, per team.
+---
 
-The time went into what goes wrong when many people use the same items at once, not into
-more screens or more record types.
+## The five decisions that matter most
 
-## 2. Stack
+### 1. Concurrency: a different tool for each kind of conflict
 
-| Choice | Why | Trade-off |
-|---|---|---|
-| Java 21, Spring Boot 4.1 | Well known, good transaction support, easy for reviewers to read. Boot 4 because 3.x is out of open-source support. | Slower to start than a small Node app (about 25 seconds on my laptop). |
-| H2 database in a file (`./data`) | Nothing to install. It has real transactions and row locks, which the concurrency rules rely on. | Single process only. Moving to Postgres means changing the JDBC URL and driver; the queries are plain JPQL. |
-| Spring Data JPA (Hibernate) | `@Version` gives optimistic locking for free, and `@Transactional` keeps each change in one transaction. | Hibernate creates tables on start (`ddl-auto=update`). Fine for a demo; production would use Flyway. |
-| Plain HTML, CSS and JavaScript | No build step and nothing to install. It only uses the JSON API, so it doesn't care what language the server is in. | No components or type checking; acceptable for one page. |
+People collide in three different ways, and one mechanism does not fit all of them.
 
-## 3. Two people claim the same item
-
-**Problem:** Ben and Chen both click "Take ownership" at the same moment. Reading the
-item, seeing nobody owns it and then saving would let both "win", and the second save
-would silently replace the first.
-
-**Decision:** claiming is a single conditional UPDATE
+**Two people take the same item** is a *race for a single slot*. Reading the item, seeing no
+owner and then saving would let both win. So claiming is one conditional statement
 (`WorkItemRepository.claim`):
 
 ```sql
@@ -34,121 +26,167 @@ update work_items set assignee_id = :me, status = 'IN_PROGRESS', version = versi
  where id = :id and assignee_id is null and status = 'OPEN'
 ```
 
-The database locks the row, so the second UPDATE waits for the first, then finds
-`assignee_id` is no longer null and changes 0 rows. The service sees 0 and answers
-409 "Already taken by Ben Okafor".
+The database serializes the two updates; the second finds the owner set and changes 0 rows.
+The service turns that into `409 "Already taken by Ben Okafor"`. Tested with six claims in the
+same instant (`ClaimTest`): one 200, five 409s, one `claimed` row in the history.
 
-**Tested by:** `ClaimTest.sixClaimsAtTheSameMomentExactlyOneWins` sends six claims at once.
+**Two people edit the same item** is *lost update*: Farah saves, then Asha saves her older
+copy over it. Every item has a `version` (JPA `@Version`) that goes up on every change, and
+the page sends the version it started from. A stale save gets `409 conflict` carrying the
+current item, and Hibernate's `where version = ?` catches two saves that pass the check in the
+same instant. The page then shows **both versions side by side** and offers *Apply my edits
+on top*, which re-sends **only the fields that person changed** against the new version. (Sending
+the whole form would quietly undo the other person's priority change.)
 
-## 4. Two people edit the same item
+I chose this over locking the item while someone edits. Locks get left behind when a laptop
+closes, and then you need timeouts and a "break lock" button. Real conflicts are rare;
+detecting them when they happen is simpler and never blocks anyone.
 
-**Problem:** Asha and Farah open the same item. Farah saves first. If Asha then saves,
-her old copy would overwrite Farah's change without anyone noticing.
+**Two status changes at once** (the owner resolves while a lead cancels; two leads approve)
+need no extra mechanism: they go through the same versioned save, so exactly one takes
+effect, and the loser is told why. `WorkflowRaceTest` checks that exactly one wins and the
+history records one action; `e2e/soak_test.py` checks the same rule under random load
+(*the version always equals the number of changes in the history*).
 
-**Decision:** optimistic locking. Every item has a `version` that goes up by one on
-every change (`@Version` in `WorkItem`). The page sends the version it started from.
+A detail that matters: **comments don't bump `version`**, otherwise every comment would
+cause an edit conflict for whoever is typing a description. They do count as *activity*
+(`updatedAt`), so an item people are discussing doesn't look forgotten.
 
-- If it doesn't match the current version, the server answers 409 `conflict` and includes
-  the item as it is now.
-- If two saves pass that check at the same moment, Hibernate's `where version = ?` on the
-  UPDATE stops the second one, and the controller turns that into the same 409.
+### 2. Retries and double clicks: idempotency keys
 
-The page then shows both versions and offers **Apply my edits on top**. That re-sends
-**only the fields this person changed**, against the new version. This matters: re-sending
-the whole form would quietly undo the other person's change (for example put their new
-priority back to the old one).
+A double click, or a retry after a timeout the person didn't see the result of, must not
+create two items or two comments. The page sends an `Idempotency-Key` (a random id made when
+the dialog opens, or when a comment is written) and the server stores the response **in the
+same transaction as the change**. A repeat gets the saved response back
+(`Idempotent-Replayed: true`). A unique constraint on (user, key) settles the case where two
+copies arrive at the same moment: the second insert fails, its transaction rolls back and it
+answers with the winner's result. Reusing a key for a different request is `422`.
 
-Comments don't change the item, so they don't bump the version. Otherwise every comment
-would cause edit conflicts.
+Claims, edits and status changes don't need keys: repeating them is already safe because of
+decision 1. I only added keys where a repeat would *create* something.
+Tested in `IdempotencyTest` (including two identical requests at once), and in the browser: a
+comment sent while offline is shown as "Not sent", and **Retry** delivers it exactly once
+because the retry reuses the key.
 
-**Why not lock the item while someone edits?** Locks get left behind when people close
-their laptop or lose their connection, and then need timeouts and "break lock" buttons.
-Real conflicts are rare, so detecting them when they happen is simpler and never blocks
-anyone.
+### 3. Authorization lives on the server, at the resource, in one table
 
-**Tested by:** `ItemEditingTest.saveBasedOnAnOldVersionIsRefusedAndReturnsTheCurrentItem`
-and `twoSavesAtTheSameMomentOnlyOneWins`.
+- **Team access.** Every read and write first resolves the person's role *in the item's team*
+  (`ItemService.visible`). Outsiders get `404`, the same answer as for an item that doesn't
+  exist, so ids can't be probed. List, search, counts and history are always filtered by the
+  person's teams in SQL, never "fetch then filter".
+- **Workflow rules are data, not scattered `if`s.** `Workflow.java` is one table: for each
+  action, the statuses it is allowed from and who may do it (any member, owner or lead, only a
+  lead). The API refuses with it, **and the item page uses the same answer to hide, grey out
+  and explain buttons**. The server returns the allowed actions with the item, so the page
+  never has to re-implement the rules and the two can't disagree.
+- **Four-eyes on approval.** An item marked "needs approval" can't be resolved until a lead
+  approves, and nobody can approve their own work: not the person who raised it, not its owner.
 
-## 5. Double clicks and retries
+Trade-off: two roles are coarse. Adding a role means adding a row to the table in one file,
+which was the point of putting the rules there.
 
-**Problem:** a double click, or a retry after a timeout, could create the same item or
-comment twice.
+### 4. Background work: a transactional outbox, built to run twice
 
-**Decision:** the page sends an `Idempotency-Key` header (a random id made when the form
-opens) with every create and comment. `Idempotency` saves the response together with
-the change, in the same transaction. A repeat with the same key gets the saved response
-back (`Idempotent-Replayed: true`) and nothing new is created. A unique constraint on
-(user, key) handles the case where both copies arrive at the same moment: the second
-insert fails, its transaction rolls back, and it answers with the first one's result.
-Reusing a key for a different request gives 422.
+Notifications can be slow or fail, and must neither slow down a change nor get lost or sent
+twice. The change and a `jobs` row are saved in **one transaction**, so a job exists if and only
+if the change was committed. `JobWorker` runs due jobs every second, each in its own
+transaction; a failure is retried with growing waits (2, 4, 8, 16 s) and after 5 attempts the
+job is kept as `DEAD` with its last error. A unique constraint on (job, person) makes
+delivery idempotent, so a retry, or two workers running the same job, still gives each person
+one notification. Recipients are decided when the change happens (the person who raised the item,
+its owner, plus the team's leads for new work), never the person who made the change.
 
-Claims, edits and status changes don't need keys. Repeating them is already safe because
-of the checks in sections 3 and 4.
+I deliberately did *not* add a message broker. Polling a table is enough here, keeps
+"change committed" and "job queued" atomic for free, and is something I can explain end to end.
+`NotificationJobTest` makes delivery fail on purpose to prove retry, backoff, dead-lettering and no duplicates.
 
-**Tested by:** `IdempotencyTest`, including two identical requests sent at once.
+### 5. Built to be paged: nothing loads "everything"
 
-## 6. Who can do what
+The brief expects tens of thousands of active items and a history that only grows. So:
 
-- **Team access.** Every read and write first checks that the person is in the item's team
-  (`ItemService.visible`). Outsiders get 404, the same as for an item that doesn't exist,
-  so they can't even learn which ids exist. Search always filters by the person's teams
-  in SQL. This is enforced on the server; the page hiding things is only a convenience.
-- **Workflow rules live in one table** (`Workflow.java`): for each action, the statuses
-  it is allowed from and who may do it (any member, the owner or a lead, or only a lead).
-  The API uses it to refuse actions. The item page uses the same check to grey out buttons
-  and show the reason, so the two never disagree.
-- **Approval.** Items marked "needs approval" can't be resolved until a lead approves.
-  Nobody can approve their own work: not the person who raised it, and not the owner.
+- **Keyset cursors, not offsets.** A page is "the next 30 after the last row I showed you",
+  with ties broken by id. The cost of page 250 equals the cost of page 1, and a row that
+  changes while someone pages can't make others show twice. Tested for all three sort orders,
+  including the worst case where every timestamp is identical, and for tampered cursors.
+- **The cards are filters.** The numbers at the top ("needs an owner", "waiting for approval",
+  "gone quiet") come from **one aggregate query built from the same predicates** as the list
+  filters, so a card's number is always the length of the list it opens (`OverviewTest`).
+- **An item's history is bounded too.** Opening an item returns the newest 50 history entries
+  (plus their comments); older ones come on request. A long incident with thousands of comments
+  stays cheap to open (`HistoryPagingTest`).
+- **The page is paged as well.** It keeps only the pages the person scrolled through, and if
+  data changes under a deep list it shows "New activity. Refresh the list" instead of moving rows
+  under their cursor.
 
-**Tested by:** `AccessTest` and `ApprovalTest`.
+Measured with 50,000 items on a laptop: first page 17-26 ms, a page 249 pages deep 45-57 ms,
+overview 75 ms. The weak spot is text search (`like '%x%'`, a scan: 160-280 ms), which is where a
+real index comes first.
 
-## 7. History
+---
 
-Every change writes a row to `item_events` **in the same transaction** as the change. If
-the change fails, the history row is rolled back too, so there is never a change without
-its history or the other way round. Edits record which fields changed, from what, to what.
+## Smaller decisions
 
-## 8. Notifications run in the background
+**"What needs attention" is a product decision, not a filter.** The overview exists because the
+brief says management can't tell what is forgotten or unowned. An item is "gone quiet" when it is
+unfinished and nothing, including comments, has happened for 24 hours (configurable). Resolved
+items stay in "active" until a lead closes them, so closing doesn't depend on someone remembering.
+The item page also says in plain words what happens next ("Nobody owns this yet", "Waiting for a
+team lead to approve", "You can approve this").
 
-**Problem:** sending notifications (today in-app; email or Slack later) can be slow or
-fail. That must not slow down or break the change itself, and a notification must not be
-lost or sent twice.
+**History is written in the same transaction as the change.** Never a change without its row
+or a row without its change. The soak test checks this invariant under load.
 
-**Decision:** the "outbox" pattern.
+**Stack.** Java 21 and Spring Boot 4.1 for transactions, optimistic locking and readable code
+(Boot 4 because 3.x is out of open-source support). H2 in a file so nothing needs installing, while
+still giving real transactions and row locks, which the concurrency rules rely on. Plain
+HTML/CSS/ES modules with no build step: it only uses the JSON API, so the server language doesn't
+matter, and the page is split into small modules by screen rather than one script.
 
-1. The change saves a `jobs` row in its own transaction. So a job exists if and only if
-   the change was committed.
-2. `JobWorker` runs every second, picks up due jobs and runs each in its own transaction.
-3. If a job fails, it is retried later with a growing wait (2s, 4s, 8s, 16s). After 5
-   failures it is marked `DEAD` and kept with its last error for someone to look at.
-4. A unique constraint on (job, person) in `notifications` means a job that runs twice
-   (a retry, or two workers) still gives each person one notification.
+**The page treats the server as the truth.** It keeps a copy and refreshes it every 5 seconds;
+the open item updates itself unless the person has unsaved edits, in which case it warns and keeps
+their typing. Two actions are *optimistic*: taking ownership and commenting show their result at
+once, then reconcile. The claim is rolled back and explained if someone else won; a comment that
+can't be sent stays on screen as "Not sent" with Retry. Everything else waits for the server,
+because showing a *wrong* approval or status would be worse than a 100 ms wait.
+Polling over server-sent events: simple, stateless and good enough at team scale (limitation noted).
 
-Who gets notified: the person who raised the item and its owner, plus the team's leads
-for new items and the previous owner when an item is released. Never the person who made
-the change.
+**Sign-in is a demo picker.** The point of the exercise is what happens after sign-in. Everything
+asks "who is calling?" through one interceptor, so SSO would replace two classes.
 
-**Tested by:** `NotificationJobTest`, which makes delivery fail on purpose.
+**Tests follow the risks.** The dangerous behaviours are all "two things at once" and "who may
+see this", so those are tested against the real app over HTTP with real threads. A mocked
+repository can't prove that two UPDATEs serialize. A random concurrent soak test and 55
+browser checks cover what example tests can't.
 
-## 9. Search and sorting
+## What I chose not to build
 
-Search is case-insensitive text matching on title and description, always limited to the
-person's teams and to 100 results. Lists can be sorted by priority (stored as a number
-next to the label so it sorts correctly), newest, or recently updated. There are indexes
-on (team, status) and owner. This is fine for thousands of items; for much more I'd use
-Postgres full-text search.
+Attachments, due dates/SLAs, moving items between teams, @-mentions, email/Slack delivery (the
+outbox is where they'd plug in), an admin screen, and a message broker. Each is real work with
+its own failure modes; I would rather ship a small system whose behaviour I can prove.
 
-## 10. Keeping the page up to date
+## How it behaves when things go wrong
 
-The page checks for changes every 5 seconds. If the open item changed and the person
-isn't typing, it reloads it. If they are typing, it shows a warning instead of throwing
-their edits away. Live push (server-sent events) would be nicer, but polling is simple
-and good enough for a team-sized app.
+| What fails | What happens |
+|---|---|
+| Two people act on the same item at once | Exactly one succeeds; the other gets a 409 that says why; the page corrects itself |
+| A request is sent twice | Same response, nothing created twice |
+| The notification job throws | Change is already saved; job retried at 2, 4, 8, 16 s; then `DEAD` with the error |
+| The worker runs a job twice | Unique (job, person) means no duplicate notification |
+| The network drops in the browser | Banner "Can't reach the server"; a comment stays as "Not sent" and can be retried safely |
+| A sign-in expires (12 h) or the server forgets it | Back to sign-in with an explanation; nothing is half-saved |
+| Someone opens a link to an item they can't see | "Item not found", the same as if it never existed |
+| The database rejects a concurrent write | 409, never a 500 and never a lost update |
 
-## 11. Testing approach
+## If this grew by 10x
 
-The tests start the real app on a random port with an empty in-memory database and call
-it over HTTP, exactly like the browser. The concurrency tests really send requests at
-the same moment from several threads, so they test the database behaviour, not a mock of
-it. The background worker is switched off in tests and run by hand, so the tests decide
-when jobs run and can simulate time passing.
+1. **Postgres** and Flyway; `SELECT ... FOR UPDATE SKIP LOCKED` in the job worker so many workers
+   share the queue (the duplicate-safe delivery already tolerates two today).
+2. **Full-text search** (Postgres `tsvector` or trigram) for text search, the first thing that
+   would hurt.
+3. **Server-sent events** replacing the 4-requests-per-5-seconds polling, with counts cached per
+   team and invalidated on write; this is the largest load at thousands of simultaneous users.
+4. Move the outbox to a log-based or broker-backed queue only when job volume needs it, keeping the
+   "queued in the same transaction as the change" guarantee.
+5. Partition or archive `item_events` by time; the item page only ever reads the newest rows and
+   already pages the rest.
+6. Real roles beyond lead/member, and audit export, driven from the same workflow table.

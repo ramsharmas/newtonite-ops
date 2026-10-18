@@ -35,3 +35,7 @@ build/
 ### App data ###
 data/
 .DS_Store
+
+### Python (the optional browser checks in e2e/) ###
+.venv/
+__pycache__/
