@@ -3,105 +3,192 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<meta name="description" content="Newtonite Ops: one shared queue for operational work, with owners, approvals and history.">
 	<title>Newtonite Ops</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M10 23V9l12 14V9' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+	<script>
+		// Apply a saved theme before the first paint so there is no flash.
+		try { const theme = localStorage.getItem('theme'); if (theme) document.documentElement.dataset.theme = theme; } catch (e) { /* storage blocked */ }
+	</script>
 	<link rel="stylesheet" href="styles.css">
-	<script src="app.js" defer></script>
+	<script type="module" src="js/main.js"></script>
 </head>
 <body>
 
-<section id="signin" class="signin" hidden>
+<main id="signin" class="signin" hidden>
 	<div class="signin-card">
-		<h1>Newtonite Ops</h1>
-		<p class="muted">Demo sign-in, no passwords. Pick a person. Each browser tab has its own sign-in, so open a second tab to be two people at once.</p>
-		<div id="people" class="people"></div>
+		<div class="logo-row">
+			<svg class="logo" viewBox="0 0 32 32" width="40" height="40" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M10 23V9l12 14V9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			<span class="logo-text">Newtonite Ops</span>
+		</div>
+		<h1>One queue for work that can't wait</h1>
+		<p class="lead">Requests, incidents and approvals in one place, with an owner and a history for each. Pick a person to try it as.</p>
+		<p id="signin-notice" class="notice" hidden></p>
+		<div id="people" class="people" aria-label="People"></div>
+		<p class="signin-tip"><strong>Demo sign-in, no passwords.</strong> Each browser tab keeps its own sign-in, so open a second tab to be two people at once and watch what happens when you both touch the same item.</p>
 	</div>
-</section>
+</main>
 
 <div id="app" hidden>
 	<header class="topbar">
-		<span class="brand">Newtonite Ops</span>
-		<input id="search" type="search" placeholder="Search titles and descriptions" aria-label="Search items">
-		<button id="new-item-button" class="btn primary" type="button">New item</button>
+		<h1 class="sr-only">Newtonite Ops work queue</h1>
+		<a class="brand" href="./" aria-label="Newtonite Ops, home">
+			<svg class="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M10 23V9l12 14V9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			<span class="brand-name">Newtonite Ops</span>
+		</a>
+		<label class="search">
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+			<input id="search" type="search" placeholder="Search items" aria-label="Search items" autocomplete="off">
+			<kbd aria-hidden="true">/</kbd>
+		</label>
+		<button id="new-item-button" class="btn primary" type="button" aria-label="New item" title="New item (n)">
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+			<span class="label">New item</span>
+		</button>
 		<div class="inbox-wrap">
-			<button id="bell" class="btn ghost bell" type="button" aria-label="Notifications" aria-expanded="false">
-				<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z" fill="currentColor"/></svg>
+			<button id="bell" class="btn ghost icon-btn" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="inbox">
+				<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
 				<span id="unread" class="badge" hidden></span>
 			</button>
-			<div id="inbox" class="inbox" hidden>
-				<div class="inbox-head">
+			<div id="inbox" class="popover inbox" hidden>
+				<div class="popover-head">
 					<strong>Notifications</strong>
 					<button id="mark-read" class="link" type="button">Mark all read</button>
 				</div>
 				<ul id="inbox-list"></ul>
 			</div>
 		</div>
-		<span id="me-name" class="me"></span>
-		<button id="sign-out" class="btn ghost" type="button">Sign out</button>
+		<div class="user-wrap">
+			<button id="user-button" class="user-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="user-menu">
+				<span id="user-avatar"></span>
+				<span id="user-name" class="user-name"></span>
+			</button>
+			<div id="user-menu" class="popover user-menu" hidden>
+				<div class="menu-head">
+					<strong id="menu-name"></strong>
+					<div id="menu-teams" class="chips"></div>
+				</div>
+				<button id="theme-toggle" class="menu-item" type="button">Switch light / dark</button>
+				<button id="sign-out" class="menu-item" type="button">Sign out</button>
+			</div>
+		</div>
 	</header>
 
-	<div class="filters">
-		<label>Team <select id="filter-team"><option value="">All my teams</option></select></label>
-		<label>Status
-			<select id="filter-status">
-				<option value="active">Open and in progress</option>
-				<option value="">Any status</option>
-				<option value="open">Open</option>
-				<option value="in_progress">In progress</option>
-				<option value="resolved">Resolved</option>
-				<option value="closed">Closed</option>
-				<option value="cancelled">Cancelled</option>
-			</select>
-		</label>
-		<label>Owner
-			<select id="filter-assigned">
-				<option value="">Anyone</option>
-				<option value="me">Me</option>
-				<option value="unassigned">Nobody yet</option>
-			</select>
-		</label>
-		<label>Sort
-			<select id="filter-sort">
-				<option value="updated">Recently updated</option>
-				<option value="priority">Priority</option>
-				<option value="created">Newest</option>
-			</select>
-		</label>
-	</div>
+	<div id="offline" class="offline" role="status" hidden>Can't reach the server. Retrying…</div>
 
-	<main class="layout">
-		<ul id="list" class="list" aria-label="Work items"></ul>
-		<section id="detail" class="detail" aria-live="polite">
-			<p class="empty">Pick an item to see it here.</p>
-		</section>
-	</main>
-</div>
+	<section id="overview" class="overview" aria-label="What needs attention"></section>
 
-<dialog id="new-item">
-	<form id="new-item-form">
-		<h2>New work item</h2>
-		<label>Team <select name="teamId" required></select></label>
-		<label>Title <input name="title" required maxlength="200" autocomplete="off"></label>
-		<label>Description <textarea name="description" rows="4" maxlength="4000"></textarea></label>
-		<div class="row">
+	<section id="toolbar" class="toolbar" aria-label="Filters">
+		<button id="filters-toggle" class="btn filters-toggle" type="button" aria-expanded="false" aria-controls="filter-controls">
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+			Filters <span id="filters-count" class="count-badge" hidden></span>
+		</button>
+		<div id="filter-controls" class="filter-controls">
+			<label>Team <select id="filter-team"></select></label>
+			<label>Status
+				<select id="filter-status">
+					<option value="active">Active (not closed)</option>
+					<option value="">Any status</option>
+					<option value="open">Open</option>
+					<option value="in_progress">In progress</option>
+					<option value="resolved">Resolved</option>
+					<option value="closed">Closed</option>
+					<option value="cancelled">Cancelled</option>
+				</select>
+			</label>
+			<label>Owner
+				<select id="filter-assigned">
+					<option value="">Anyone</option>
+					<option value="me">Me</option>
+					<option value="unassigned">Nobody yet</option>
+				</select>
+			</label>
 			<label>Priority
-				<select name="priority">
+				<select id="filter-priority">
+					<option value="">Any</option>
 					<option value="urgent">Urgent</option>
 					<option value="high">High</option>
-					<option value="medium" selected>Medium</option>
+					<option value="medium">Medium</option>
 					<option value="low">Low</option>
 				</select>
 			</label>
-			<label>Kind
-				<select name="kind">
-					<option value="task">Task</option>
-					<option value="incident">Incident</option>
+			<label>Flag
+				<select id="filter-attention">
+					<option value="">None</option>
+					<option value="approval">Waiting for approval</option>
+					<option value="stale">Gone quiet</option>
 				</select>
 			</label>
+			<label>Sort
+				<select id="filter-sort">
+					<option value="updated">Recent activity</option>
+					<option value="priority">Priority</option>
+					<option value="created">Newest</option>
+				</select>
+			</label>
+			<button id="clear-filters" class="link" type="button" hidden>Clear filters</button>
 		</div>
-		<label class="check"><input type="checkbox" name="requiresApproval"> Needs a lead's approval before it can be resolved</label>
+		<span id="result-count" class="result-count" aria-live="polite"></span>
+	</section>
+
+	<main class="workspace">
+		<section id="list-pane" class="pane list-pane" aria-label="Work items">
+			<ul id="list" class="list"></ul>
+		</section>
+		<section id="detail" class="pane detail-pane" aria-live="polite"></section>
+	</main>
+</div>
+
+<dialog id="new-item" aria-labelledby="new-item-title">
+	<form id="new-item-form" autocomplete="off">
+		<header class="dialog-head">
+			<h2 id="new-item-title">New work item</h2>
+			<button type="button" class="btn ghost icon-btn" id="new-item-cancel" aria-label="Close">
+				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+			</button>
+		</header>
+		<label class="field"><span class="field-label">Team</span> <select name="teamId" required></select></label>
+		<label class="field"><span class="field-label">Title</span>
+			<input name="title" required maxlength="200" placeholder="What needs doing?">
+		</label>
+		<label class="field"><span class="field-label">Description <span class="optional">optional</span></span>
+			<textarea name="description" rows="4" maxlength="4000" placeholder="What happened, what is affected, what has been tried?"></textarea>
+		</label>
+		<div class="form-row">
+			<fieldset class="segmented">
+				<legend>Priority</legend>
+				<div class="seg">
+					<label><input type="radio" name="priority" value="urgent"><span>Urgent</span></label>
+					<label><input type="radio" name="priority" value="high"><span>High</span></label>
+					<label><input type="radio" name="priority" value="medium" checked><span>Medium</span></label>
+					<label><input type="radio" name="priority" value="low"><span>Low</span></label>
+				</div>
+			</fieldset>
+			<fieldset class="segmented">
+				<legend>Kind</legend>
+				<div class="seg">
+					<label><input type="radio" name="kind" value="task" checked><span>Task</span></label>
+					<label><input type="radio" name="kind" value="incident"><span>Incident</span></label>
+				</div>
+			</fieldset>
+		</div>
+		<label class="check"><input type="checkbox" name="requiresApproval"> <span>Needs a team lead's approval before it can be resolved</span></label>
+		<p id="new-item-error" class="notice error" role="alert" hidden></p>
+		<footer class="dialog-buttons">
+			<span class="muted small">Ctrl or ⌘ + Enter to create</span>
+			<button id="new-item-submit" type="submit" class="btn primary">Create item</button>
+		</footer>
+	</form>
+</dialog>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+	<form method="dialog" class="confirm">
+		<h2 id="confirm-title"></h2>
+		<p id="confirm-message"></p>
 		<div class="dialog-buttons">
-			<button type="button" class="btn ghost" id="new-item-cancel">Cancel</button>
-			<button type="submit" class="btn primary">Create item</button>
+			<button value="cancel" class="btn ghost">Keep it</button>
+			<button id="confirm-ok" value="ok" class="btn primary">Confirm</button>
 		</div>
 	</form>
 </dialog>
