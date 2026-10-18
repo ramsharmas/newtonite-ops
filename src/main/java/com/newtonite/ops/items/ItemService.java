@@ -1,7 +1,10 @@
 package com.newtonite.ops.items;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -13,6 +16,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +27,7 @@ import com.newtonite.ops.auth.User;
 import com.newtonite.ops.items.ItemViews.ActionView;
 import com.newtonite.ops.items.ItemViews.CommentView;
 import com.newtonite.ops.items.ItemViews.ItemDetail;
+import com.newtonite.ops.items.ItemViews.HistoryPage;
 import com.newtonite.ops.items.ItemViews.ItemView;
 import com.newtonite.ops.items.ItemViews.UserRef;
 import com.newtonite.ops.items.Workflow.Action;
@@ -49,7 +54,18 @@ public class ItemService {
 			String priority) {
 	}
 
-	private static final int LIST_LIMIT = 100;
+	/** One page of the item list. {@code nextCursor} is null on the last page. */
+	public record ItemPage(List<ItemView> items, long total, String nextCursor) {
+	}
+
+	/** The numbers on the overview cards. Each one equals the {@code total} of the list it opens. */
+	public record Overview(long active, long mine, long unassigned, long urgent, long needsApproval, long stale,
+			long staleAfterHours) {
+	}
+
+	private static final int DEFAULT_PAGE_SIZE = 30;
+	private static final int MAX_PAGE_SIZE = 100;
+	private static final int HISTORY_PAGE_SIZE = 50;
 
 	private final WorkItemRepository items;
 	private final CommentRepository comments;
@@ -73,8 +89,17 @@ public class ItemService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<ItemView> list(User me, ItemSearch.Filter filter) {
-		return views.items(search.find(me.getId(), access.teamIds(me.getId()), filter, LIST_LIMIT));
+	public ItemPage list(User me, ItemSearch.Filter filter, String cursor, Integer limit) {
+		int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+		ItemSearch.Page page = search.find(me.getId(), access.teamIds(me.getId()), filter, cursor, size);
+		return new ItemPage(views.items(page.items()), page.total(), page.nextCursor());
+	}
+
+	@Transactional(readOnly = true)
+	public Overview overview(User me, Long teamId) {
+		ItemSearch.Counts counts = search.counts(me.getId(), access.teamIds(me.getId()), teamId);
+		return new Overview(counts.active(), counts.mine(), counts.unassigned(), counts.urgent(),
+				counts.needsApproval(), counts.stale(), search.staleAfter().toHours());
 	}
 
 	@Transactional(readOnly = true)
@@ -88,8 +113,42 @@ public class ItemService {
 							: new ActionView(action.key(), false, denial.code(), denial.message());
 				})
 				.toList();
-		return views.detail(visible.item(), visible.role(), actions,
-				comments.findByItemIdOrderByIdAsc(id), events.findByItemIdOrderByIdAsc(id));
+		Activity latest = activity(id, null, HISTORY_PAGE_SIZE);
+		return views.detail(visible.item(), visible.role(), actions, latest.comments(), latest.events(), latest.hasOlder(),
+				comments.countByItemId(id), events.countByItemId(id));
+	}
+
+	/** Older activity, for the "show older" button. {@code before} is the id of the oldest event the caller already has. */
+	@Transactional(readOnly = true)
+	public HistoryPage history(User me, long id, Long before, Integer limit) {
+		visible(me, id);
+		int size = limit == null ? HISTORY_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+		Activity page = activity(id, before, size);
+		return views.history(page.comments(), page.events(), page.hasOlder());
+	}
+
+	/** A window of an item's history (oldest first) plus the comments that appear in it. */
+	private record Activity(List<Comment> comments, List<ItemEvent> events, boolean hasOlder) {
+	}
+
+	private Activity activity(long itemId, Long before, int size) {
+		PageRequest page = PageRequest.of(0, size + 1);
+		List<ItemEvent> rows = before == null
+				? events.findByItemIdOrderByIdDesc(itemId, page)
+				: events.findByItemIdAndIdLessThanOrderByIdDesc(itemId, before, page);
+		boolean hasOlder = rows.size() > size;
+		List<ItemEvent> window = new ArrayList<>(hasOlder ? rows.subList(0, size) : rows);
+		Collections.reverse(window);
+
+		// A "commented" event points at its comment; load just those bodies.
+		List<Long> commentIds = window.stream()
+				.filter(event -> "commented".equals(event.getType()) && event.getDetail() != null)
+				.map(event -> json.readTree(event.getDetail()).path("commentId").asLong(0))
+				.filter(commentId -> commentId > 0)
+				.toList();
+		List<Comment> found = new ArrayList<>(commentIds.isEmpty() ? List.of() : comments.findAllById(commentIds));
+		found.sort(Comparator.comparing(Comment::getId));
+		return new Activity(found, window, hasOlder);
 	}
 
 	public ItemView create(User me, NewItem request) {
@@ -200,8 +259,10 @@ public class ItemService {
 		WorkItem item = visible(me, id).item();
 		Instant now = Instant.now();
 		// Comments don't change the item itself, so they don't bump its version
-		// and can't cause edit conflicts.
+		// and can't cause edit conflicts. They do count as activity, so a discussed
+		// item doesn't look forgotten.
 		Comment comment = comments.save(new Comment(id, me.getId(), body.trim(), now));
+		items.touch(id, now);
 		record(item, me, "commented", Map.of("commentId", comment.getId()), Set.of(), now);
 		return views.comment(comment);
 	}

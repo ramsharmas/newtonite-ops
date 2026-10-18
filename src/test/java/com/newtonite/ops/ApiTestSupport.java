@@ -22,6 +22,7 @@ import java.util.concurrent.Future;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import tools.jackson.databind.JsonNode;
@@ -47,6 +48,10 @@ public abstract class ApiTestSupport {
 
 	@Autowired
 	ObjectMapper json;
+
+	/** For setting up situations the API can't create, such as an item nobody has touched for days. */
+	@Autowired
+	JdbcTemplate jdbc;
 
 	private final HttpClient http = HttpClient.newHttpClient();
 	private final Map<String, String> tokens = new ConcurrentHashMap<>();

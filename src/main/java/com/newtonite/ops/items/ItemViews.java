@@ -49,8 +49,17 @@ public class ItemViews {
 	public record EventView(Long id, String type, UserRef actor, Map<?, ?> detail, Instant createdAt) {
 	}
 
+	/**
+	 * One item with the newest part of its activity. {@code history} is oldest first, like a log;
+	 * {@code comments} holds the bodies of the comments that appear in it. Older activity is
+	 * fetched separately (see ItemService#history) so a long-running item stays cheap to open.
+	 */
 	public record ItemDetail(ItemView item, String myRole, List<ActionView> actions, List<CommentView> comments,
-			List<EventView> history) {
+			List<EventView> history, boolean hasOlderHistory, long commentsTotal, long historyTotal) {
+	}
+
+	/** A page of older activity. */
+	public record HistoryPage(List<CommentView> comments, List<EventView> history, boolean hasOlderHistory) {
 	}
 
 	private final UserRepository users;
@@ -75,19 +84,34 @@ public class ItemViews {
 	}
 
 	public ItemDetail detail(WorkItem item, Role myRole, List<ActionView> actions, List<Comment> comments,
-			List<ItemEvent> events) {
+			List<ItemEvent> events, boolean hasOlder, long commentsTotal, long historyTotal) {
 		Names names = names(
 				Stream.of(Stream.of(item.getAssigneeId(), item.getCreatedBy(), item.getApprovedBy()),
 						comments.stream().map(Comment::getAuthorId),
 						events.stream().map(ItemEvent::getActorId))
 						.flatMap(s -> s).toList(),
 				List.of(item.getTeamId()));
-		return new ItemDetail(
-				item(item, names),
-				myRole.key(),
-				actions,
-				comments.stream().map(c -> new CommentView(c.getId(), names.user(c.getAuthorId()), c.getBody(), c.getCreatedAt())).toList(),
-				events.stream().map(e -> new EventView(e.getId(), e.getType(), names.user(e.getActorId()), detail(e), e.getCreatedAt())).toList());
+		return new ItemDetail(item(item, names), myRole.key(), actions, commentViews(comments, names),
+				eventViews(events, names), hasOlder, commentsTotal, historyTotal);
+	}
+
+	public HistoryPage history(List<Comment> comments, List<ItemEvent> events, boolean hasOlder) {
+		Names names = names(
+				Stream.concat(comments.stream().map(Comment::getAuthorId), events.stream().map(ItemEvent::getActorId)).toList(),
+				List.of());
+		return new HistoryPage(commentViews(comments, names), eventViews(events, names), hasOlder);
+	}
+
+	private List<CommentView> commentViews(List<Comment> comments, Names names) {
+		return comments.stream()
+				.map(c -> new CommentView(c.getId(), names.user(c.getAuthorId()), c.getBody(), c.getCreatedAt()))
+				.toList();
+	}
+
+	private List<EventView> eventViews(List<ItemEvent> events, Names names) {
+		return events.stream()
+				.map(e -> new EventView(e.getId(), e.getType(), names.user(e.getActorId()), detail(e), e.getCreatedAt()))
+				.toList();
 	}
 
 	public CommentView comment(Comment comment) {

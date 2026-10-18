@@ -26,4 +26,13 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, Long> {
 			   and w.status = com.newtonite.ops.items.Status.OPEN
 			""")
 	int claim(@Param("id") long id, @Param("userId") long userId, @Param("now") Instant now);
+
+	/**
+	 * Records activity (a comment) without touching {@code version}. A bulk UPDATE doesn't
+	 * go through Hibernate's version check, which is exactly what we want here: someone
+	 * commenting must not make another person's edit conflict.
+	 */
+	@Modifying(flushAutomatically = true)
+	@Query("update WorkItem w set w.updatedAt = :now where w.id = :id")
+	int touch(@Param("id") long id, @Param("now") Instant now);
 }

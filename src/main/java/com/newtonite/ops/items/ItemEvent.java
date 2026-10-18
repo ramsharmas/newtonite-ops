@@ -15,7 +15,7 @@ import jakarta.persistence.Table;
  * describes, so there is never a change without its history row (or the other way round).
  */
 @Entity
-@Table(name = "item_events", indexes = @Index(name = "idx_events_item", columnList = "item_id"))
+@Table(name = "item_events", indexes = @Index(name = "idx_events_item_id", columnList = "item_id, id"))
 public class ItemEvent {
 
 	@Id

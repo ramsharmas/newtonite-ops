@@ -20,7 +20,8 @@ import jakarta.persistence.Version;
 @Entity
 @Table(name = "work_items", indexes = {
 		@Index(name = "idx_items_team_status", columnList = "team_id, status"),
-		@Index(name = "idx_items_assignee", columnList = "assignee_id") })
+		@Index(name = "idx_items_assignee", columnList = "assignee_id"),
+		@Index(name = "idx_items_team_updated", columnList = "team_id, updated_at") })
 public class WorkItem {
 
 	public static final String KIND_TASK = "task";

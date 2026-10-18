@@ -38,4 +38,8 @@ public class LoginToken {
 	public Long getUserId() {
 		return userId;
 	}
+
+	public Instant getCreatedAt() {
+		return createdAt;
+	}
 }

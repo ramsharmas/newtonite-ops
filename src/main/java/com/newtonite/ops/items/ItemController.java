@@ -1,7 +1,5 @@
 package com.newtonite.ops.items;
 
-import java.util.List;
-
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -22,7 +20,10 @@ import org.springframework.web.bind.annotation.RestController;
 import com.newtonite.ops.auth.CurrentUser;
 import com.newtonite.ops.auth.User;
 import com.newtonite.ops.items.ItemService.ItemEdit;
+import com.newtonite.ops.items.ItemService.ItemPage;
 import com.newtonite.ops.items.ItemService.NewItem;
+import com.newtonite.ops.items.ItemService.Overview;
+import com.newtonite.ops.items.ItemViews.HistoryPage;
 import com.newtonite.ops.items.ItemViews.ItemDetail;
 import com.newtonite.ops.items.ItemViews.ItemView;
 import com.newtonite.ops.items.Workflow.Action;
@@ -31,9 +32,6 @@ import com.newtonite.ops.web.Idempotency;
 @RestController
 @RequestMapping("/api/items")
 public class ItemController {
-
-	public record ItemList(List<ItemView> items) {
-	}
 
 	public record NewComment(@NotBlank @Size(max = 2000) String body) {
 	}
@@ -47,13 +45,23 @@ public class ItemController {
 	}
 
 	@GetMapping
-	public ItemList list(@CurrentUser User me,
+	public ItemPage list(@CurrentUser User me,
 			@RequestParam(required = false) String q,
 			@RequestParam(required = false) Long teamId,
 			@RequestParam(required = false) String status,
 			@RequestParam(required = false) String assigned,
-			@RequestParam(required = false) String sort) {
-		return new ItemList(items.list(me, new ItemSearch.Filter(q, teamId, status, assigned, sort)));
+			@RequestParam(required = false) String priority,
+			@RequestParam(required = false) String attention,
+			@RequestParam(required = false) String sort,
+			@RequestParam(required = false) String cursor,
+			@RequestParam(required = false) Integer limit) {
+		return items.list(me, new ItemSearch.Filter(q, teamId, status, assigned, priority, attention, sort), cursor, limit);
+	}
+
+	/** Numbers for the "what needs attention" cards. Optional {@code teamId} narrows them like the list's team filter. */
+	@GetMapping("/overview")
+	public Overview overview(@CurrentUser User me, @RequestParam(required = false) Long teamId) {
+		return items.overview(me, teamId);
 	}
 
 	@PostMapping
@@ -67,6 +75,13 @@ public class ItemController {
 	@GetMapping("/{id}")
 	public ItemDetail get(@CurrentUser User me, @PathVariable long id) {
 		return items.detail(me, id);
+	}
+
+	/** Older activity for the item page's "show older" button. */
+	@GetMapping("/{id}/history")
+	public HistoryPage history(@CurrentUser User me, @PathVariable long id,
+			@RequestParam(required = false) Long before, @RequestParam(required = false) Integer limit) {
+		return items.history(me, id, before, limit);
 	}
 
 	@PatchMapping("/{id}")

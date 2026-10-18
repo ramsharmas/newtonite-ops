@@ -10,10 +10,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -37,6 +39,17 @@ public class ApiExceptionHandler {
 	@ExceptionHandler({ HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class })
 	ResponseEntity<Map<String, Object>> unreadable(Exception e) {
 		return ResponseEntity.badRequest().body(body("invalid", "Request is not valid"));
+	}
+
+	// Unknown URLs and wrong HTTP methods get the same error shape as everything else.
+	@ExceptionHandler(NoResourceFoundException.class)
+	ResponseEntity<Map<String, Object>> noSuchPath(NoResourceFoundException e) {
+		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body("not_found", "Nothing at this address"));
+	}
+
+	@ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+	ResponseEntity<Map<String, Object>> wrongMethod(HttpRequestMethodNotSupportedException e) {
+		return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(body("method_not_allowed", e.getMessage()));
 	}
 
 	// Two requests changed the same row at the same moment and the database refused the second one.

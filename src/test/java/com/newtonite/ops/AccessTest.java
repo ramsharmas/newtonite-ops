@@ -64,4 +64,22 @@ class AccessTest extends ApiTestSupport {
 		Reply reply = post("Erik", "/api/items", Map.of("teamId", teamId("Payments"), "title", "Sneaky"));
 		assertThat(reply.status()).isEqualTo(404);
 	}
+
+	@Test
+	void aSignInStopsWorkingAfterItsLifetime() {
+		String fresh = token("Asha");
+		assertThat(get("Asha", "/api/me").status()).isEqualTo(200);
+
+		// Pretend this browser signed in 13 hours ago (the limit is 12).
+		jdbc.update("update login_tokens set created_at = dateadd('HOUR', -13, current_timestamp) where token = ?", fresh);
+
+		assertThat(get("Asha", "/api/me").status()).isEqualTo(401);
+	}
+
+	@Test
+	void unknownAddressesAnswerInTheSameShapeAsEveryOtherError() {
+		Reply reply = get("Asha", "/api/does-not-exist");
+		assertThat(reply.status()).isEqualTo(404);
+		assertThat(reply.error()).isEqualTo("not_found");
+	}
 }
